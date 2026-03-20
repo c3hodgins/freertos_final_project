@@ -6,6 +6,7 @@
 #include "hardware/adc.h"
 #include "FreeRTOSConfig.h"
 #include "stream_buffer.h"
+#define TLS_RAND_INDEX 0
 
 #define ADC_PIN 27 
 #define ADC_MUX (ADC_PIN-26)
@@ -15,9 +16,14 @@ TaskHandle_t test_handle;
 void test_task(__unused void *params);
 void adc_task(__unused void *params);
 void adc_isr();
+int tls_rand();
+void tls_srand(uint32_t seed);
 
 static volatile uint16_t gNumSamples = 0;
 static volatile StreamBufferHandle_t gxStreamHandle;
+static uint8_t task1_idx = 1;
+static uint8_t task2_idx = 2;
+static uint8_t task3_idx = 3;
 
 
 typedef struct {
@@ -30,9 +36,10 @@ typedef struct {
 int main( void )
 {
     stdio_init_all();
-
-    xTaskCreate(adc_task, "AdcTask", 1024, NULL, 1, &adc_handle); 
-    xTaskCreate(test_task, "TestTask", 2048, (void*)adc_handle, 2, NULL);
+    xTaskCreate(adc_task, "AdcTask", 2048, NULL, 2, &adc_handle); 
+    xTaskCreate(test_task, "TestTask", 2048, &task1_idx , 1, NULL);
+    // xTaskCreate(test_task, "TestTask", 2048, &task2_idx , 1, NULL);
+    // xTaskCreate(test_task, "TestTask", 2048, &task3_idx , 1, NULL);
     
     vTaskStartScheduler();
 }
@@ -55,9 +62,8 @@ void adc_task(__unused void *params){
     uint32_t receiveData;
     uint16_t adc_val;
     uint8_t cnt = 0;
-    // xTaskNotifyGiveIndexed( adc_handle, 2);
+
     while(1){
-        // Wait on notification from task 
         cnt++;
         xTaskNotifyWaitIndexed(1, 0, 0xFFFFFFFF, &receiveData, portMAX_DELAY);
         pxRequestStruct = (adc_request_t*)receiveData;
@@ -80,19 +86,29 @@ void adc_task(__unused void *params){
 
 void test_task(__unused void *params) 
 {
-    static adc_request_t xRequestStruct;
+    adc_request_t xRequestStruct;
     uint8_t cntr = 0;
     uint16_t rxBuf[255];
     xRequestStruct.ucChannel = 0;
     xRequestStruct.ucNumSamples = 250;
     xRequestStruct.usSampleRate = 1000;
-    xRequestStruct.xStreamHandle = xStreamBufferCreate(512, 500);
+    xRequestStruct.xStreamHandle = xStreamBufferCreate(512, 1);
+    tls_srand(*(uint8_t*)params);
+    
     while(1){
-        xTaskNotifyIndexed( (TaskHandle_t)params, 1, (uint32_t)&xRequestStruct, eSetValueWithOverwrite);
-        
-        // xStreamBufferReceive(xRequestStruct.xStreamHandle, rxBuf, 250*2, portMAX_DELAY);
-        // printf("received");
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        uint8_t ucRandChannel = tls_rand()%5;
+        uint16_t ucRandomDelay = (uint16_t)(((float)tls_rand()/32767.0f) * (5000.0f) + 1.0f);
+        uint8_t ucRandNumSamples = tls_rand()%256;
+        uint16_t usRandSampleRate = (uint16_t)(((float)tls_rand() / 32767.0f) * (50000.0f - 750.0f)) + 750.0f;
+        xRequestStruct.ucNumSamples = ucRandNumSamples;
+        xRequestStruct.ucChannel = ucRandChannel;
+        xRequestStruct.usSampleRate = usRandSampleRate;
+        xStreamBufferSetTriggerLevel(xRequestStruct.xStreamHandle, 2*xRequestStruct.ucNumSamples);
+        xTaskNotifyIndexed((TaskHandle_t)adc_handle, 1, (uint32_t)&xRequestStruct, eSetValueWithOverwrite);
+        printf("Task %d Requesting %d samples from channel %d at rate %d\n", 
+            *(uint8_t*)params, ucRandNumSamples, ucRandChannel, usRandSampleRate);
+        xStreamBufferReceive(xRequestStruct.xStreamHandle, rxBuf, 2*xRequestStruct.ucNumSamples, portMAX_DELAY);
+        vTaskDelay(pdMS_TO_TICKS(ucRandomDelay));
     }
 }
 
@@ -118,4 +134,17 @@ void adc_isr()
         gNumSamples = -1;
     }
     portYIELD_FROM_ISR( HighPrioTaskWoken);
+}
+
+int tls_rand()
+{ 
+    uint32_t seed= (uint32_t)pvTaskGetThreadLocalStoragePointer(NULL, TLS_RAND_INDEX);
+    seed = (seed * 1103515245 + 12345);
+    vTaskSetThreadLocalStoragePointer(NULL, TLS_RAND_INDEX, (void *)seed);
+    return (int)((seed >> 16) & 0x7FFF);
+}
+
+void tls_srand(uint32_t seed)
+{ 
+    vTaskSetThreadLocalStoragePointer(NULL, TLS_RAND_INDEX, (void *)seed);
 }
