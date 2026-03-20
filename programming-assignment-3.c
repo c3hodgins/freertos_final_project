@@ -33,7 +33,7 @@ int main( void )
 
     xTaskCreate(adc_task, "AdcTask", 1024, NULL, 1, &adc_handle); 
     xTaskCreate(test_task, "TestTask", 2048, (void*)adc_handle, 2, NULL);
-
+    
     vTaskStartScheduler();
 }
 
@@ -54,12 +54,14 @@ void adc_task(__unused void *params){
     adc_request_t* pxRequestStruct;
     uint32_t receiveData;
     uint16_t adc_val;
+    uint8_t cnt = 0;
     // xTaskNotifyGiveIndexed( adc_handle, 2);
     while(1){
         // Wait on notification from task 
-        xTaskNotifyWaitIndexed(1, 0, 0, &receiveData, portMAX_DELAY);
+        cnt++;
+        xTaskNotifyWaitIndexed(1, 0, 0xFFFFFFFF, &receiveData, portMAX_DELAY);
         pxRequestStruct = (adc_request_t*)receiveData;
-        printf("Received request for %d samples from channel %d at rate %d\n",
+        printf("Received request %d for %d samples from channel %d at rate %d\n", cnt, 
             pxRequestStruct->ucNumSamples, pxRequestStruct->ucChannel, pxRequestStruct->usSampleRate);
 
         ulTaskNotifyTakeIndexed(2, 1, portMAX_DELAY);
@@ -67,8 +69,9 @@ void adc_task(__unused void *params){
 
         gNumSamples = pxRequestStruct->ucNumSamples;
         gxStreamHandle = pxRequestStruct->xStreamHandle;
+        adc_fifo_drain();
         adc_select_input(pxRequestStruct->ucChannel);
-        adc_set_clkdiv(48000.0f/pxRequestStruct->usSampleRate - 1);
+        adc_set_clkdiv(48000000.0f/pxRequestStruct->usSampleRate - 1);
         irq_set_enabled(ADC_IRQ_FIFO, true);
         adc_irq_set_enabled(true);
         adc_run(true);  
@@ -79,16 +82,16 @@ void test_task(__unused void *params)
 {
     static adc_request_t xRequestStruct;
     uint8_t cntr = 0;
-    // uint16_t rxBuf[255];
+    uint16_t rxBuf[255];
     xRequestStruct.ucChannel = 0;
     xRequestStruct.ucNumSamples = 250;
     xRequestStruct.usSampleRate = 1000;
-    xRequestStruct.xStreamHandle = xStreamBufferCreate(250*2, 1);
+    xRequestStruct.xStreamHandle = xStreamBufferCreate(512, 500);
     while(1){
         xTaskNotifyIndexed( (TaskHandle_t)params, 1, (uint32_t)&xRequestStruct, eSetValueWithOverwrite);
-
-        // xStreamBufferReceive(xRequestStruct.xStreamHandle, rxBuf, 1, portMAX_DELAY);
-
+        
+        // xStreamBufferReceive(xRequestStruct.xStreamHandle, rxBuf, 250*2, portMAX_DELAY);
+        // printf("received");
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
