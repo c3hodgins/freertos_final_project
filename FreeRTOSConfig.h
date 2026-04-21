@@ -34,7 +34,7 @@
 #define INCLUDE_vTaskPrioritySet                0
 #define INCLUDE_uxTaskPriorityGet               0
 #define INCLUDE_vTaskDelete                     0
-#define INCLUDE_vTaskSuspend                    0
+#define INCLUDE_vTaskSuspend                    1
 #define INCLUDE_xTaskDelayUntil                 0
 #define INCLUDE_vTaskDelay                      1
 #define INCLUDE_xTaskGetSchedulerState          0
@@ -49,15 +49,15 @@
 
 /* SYNCHRONIZATION PROPERTIES*/
 #define configUSE_TASK_NOTIFICATIONS                                1
-#define configTASK_NOTIFICATION_ARRAY_ENTRIES                       1
-#define configUSE_MUTEXES                                           0
+#define configTASK_NOTIFICATION_ARRAY_ENTRIES                       5
+#define configUSE_MUTEXES                                           1
 #define configUSE_RECURSIVE_MUTEXES                                 0
-#define configUSE_COUNTING_SEMAPHORES                               0
+#define configUSE_COUNTING_SEMAPHORES                               1
 #define configQUEUE_REGISTRY_SIZE                                   8
 #define configUSE_QUEUE_SETS                                        0
 #define configUSE_NEWLIB_REENTRANT                                  0
 #define configENABLE_BACKWARD_COMPATIBILITY                         0
-#define configNUM_THREAD_LOCAL_STORAGE_POINTERS                     5
+#define configNUM_THREAD_LOCAL_STORAGE_POINTERS                     10
 #define configUSE_MINI_LIST_ITEM                                    1
 #define configUSE_SB_COMPLETED_CALLBACK                             0
 

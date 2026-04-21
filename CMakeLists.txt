@@ -23,26 +23,28 @@ endif()
 
 include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
-project(programming_assignment_3 C CXX ASM)
+project(final-project C CXX ASM)
 
 pico_sdk_init()
 
 set(FREERTOS_KERNEL_PATH "${USERHOME}/.FreeRTOS-Kernel")
 include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2350_ARM_NTZ/FreeRTOS_Kernel_import.cmake)
 
-add_executable(programming_assignment_3 programming-assignment-3.c )
+add_executable(final-project final-project.c )
 
-pico_enable_stdio_uart(programming_assignment_3 0)
-pico_enable_stdio_usb(programming_assignment_3 1)
+pico_enable_stdio_uart(final-project 0)
+pico_enable_stdio_usb(final-project 1)
 
-target_link_libraries(programming_assignment_3
+target_link_libraries(final-project
     FreeRTOS-Kernel-Heap4
     #FreeRTOS-Kernel-Static
     hardware_adc
+    hardware_spi
+    hardware_dma
     pico_stdlib)
 
-target_include_directories(programming_assignment_3 PUBLIC
+target_include_directories(final-project PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
-pico_add_extra_outputs(programming_assignment_3)
+pico_add_extra_outputs(final-project)
