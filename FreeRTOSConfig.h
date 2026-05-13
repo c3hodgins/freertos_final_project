@@ -3,7 +3,7 @@
 
 /* CLOCK SETTINGS */
 #define configCPU_CLOCK_HZ                                          150000000
-#define configTICK_RATE_HZ                                          100
+#define configTICK_RATE_HZ                                          1000
 
 /* SCHEDULER RELATED */
 #define configUSE_PREEMPTION                                        1                  

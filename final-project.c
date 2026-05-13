@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 
+#define ENABLE_DEBUG_MODE 0
+
 #define SPI_PORT spi0
 #define CSN 1
 #define SCK 2
@@ -21,6 +23,22 @@
 #define WIDTH 160
 #define BYTES_PER_PIXEL 2
 
+#if ENABLE_DEBUG_MODE
+    #define NDEBUG
+#endif
+
+#if defined(NDEBUG)
+    #define configASSERT( x ) ((void)0)
+#else
+    #include <stdio.h>
+    #define configASSERT( x ) \
+        if( ( x ) == 0 ) { \
+            printf("ASSERTION FAILED: %s, file %s, line %d\n", #x, __FILE__, __LINE__); \
+            __asm volatile("bkpt #0"); \
+            while(1); \
+        }
+#endif
+
 // STATIC OBJECTS
 SemaphoreHandle_t spi_mtx;
 SemaphoreHandle_t dma_sema;
@@ -31,6 +49,19 @@ uint8_t zero_buf[HEIGHT* BYTES_PER_PIXEL] = {0};
 int dma_tx_chan;
 int j = 0;
 int l = 0;
+
+// Rotation Variables
+volatile float rot_x = 0.0f;
+volatile float rot_y = 0.0f;
+volatile float rot_z = 0.0f;
+volatile int8_t dir_x = 0;
+volatile int8_t dir_y = 0;
+
+volatile uint32_t debug_frame_counter = 0;
+volatile float debug_current_angle_x = 0.0f;
+volatile float debug_current_angle_y = 0.0f;
+
+#define ROTATION_SPEED_PER_FRAME 0.05f 
 
 // LINEAR ALGEBRA STRUCTS
 typedef struct{
@@ -47,6 +78,10 @@ typedef struct{
 // TASKS
 void spi_task(void *pvParams);
 void frame_buf_task(void *pvParams);
+void button_task(void *pvParams);
+#if ENABLE_DEBUG_MODE
+void debug_diagnostic_task(void *pvParams);
+#endif
 void __isr dma_callback();
 
 // SPI DISPLAY HELPERS
@@ -79,12 +114,20 @@ int main() {
     gpio_setup();
     dma_init();
     spi_mtx = xSemaphoreCreateMutex();
-    if (spi_mtx != NULL) {
-        xTaskCreate(spi_task, "SPI_Task", 1024, NULL, 2, &spi_handle);
-        xTaskCreate(frame_buf_task, "Frame_task", 256, NULL, 1, NULL);
-        xTaskCreate(button_task, "ButtonTask", 256, NULL, 1, NULL);
-        vTaskStartScheduler();
-    }
+
+    configASSERT(spi_mtx != NULL); // Confirm mutex memory is allocated
+    int status;
+    status = xTaskCreate(spi_task, "SPI_Task", 1024, NULL, 2, &spi_handle);
+    configASSERT(status == pdPASS);
+    status = xTaskCreate(frame_buf_task, "Frame_task", 256, NULL, 1, NULL);
+    configASSERT(status == pdPASS);
+    status = xTaskCreate(button_task, "ButtonTask", 256, NULL, 1, NULL);
+    configASSERT(status == pdPASS);
+    #if ENABLE_DEBUG_MODE
+        status = xTaskCreate(debug_diagnostic_task, "DebugTask", 512, NULL, 0, NULL);
+        configASSERT(status == pdPASS);
+    #endif
+    vTaskStartScheduler();
     while (true);
 }
 
@@ -109,52 +152,55 @@ void frame_buf_task(void *pvParams){
     float phase = 0.0;
     // uint8_t intensity;
     uint16_t offset = 0xb1fd;
-    // uint8_t sin_table[160];
-    // int current_val = 64;
+    static float local_rot_x = 0.0f;
+    static float local_rot_y = 0.0f;
     while(true){
         memset(frame_buf2, 0, HEIGHT*WIDTH*BYTES_PER_PIXEL);
-        draw_line((point_t){0, -64}, (point_t){0, 63}, frame_buf2, 0x0841);
-        draw_line((point_t){-80, 0}, (point_t){79, 0}, frame_buf2, 0x0841);
+        local_rot_x += (dir_x * ROTATION_SPEED_PER_FRAME);
+        local_rot_y += (dir_y * ROTATION_SPEED_PER_FRAME);
+
+        #if ENABLE_DEBUG_MODE
+            debug_frame_counter++;
+            debug_current_angle_x = local_rot_x;
+            debug_current_angle_y = local_rot_y;
+            
+            draw_line((point_t){0, -64}, (point_t){0, 63}, frame_buf2, 0x3186); // Axes
+            draw_line((point_t){-80, 0}, (point_t){79, 0}, frame_buf2, 0x3186); 
+        #endif
         
         point3d_t points[8] = {
             {40, 40, -40},
             {40, -40, -40}, 
             {40, -40, 40}, 
             {40, 40, 40},
-
             {-40, 40, -40},
             {-40, -40, -40}, 
             {-40, -40, 40}, 
             {-40, 40, 40},
-            
         };
+        
         point3d_t p_points[8];
-        for(int p = 0;p < 8; p++){
+        for (int p = 0; p < 8; p++) {
             point3d_t p3d = points[p];
-            p3d = rotate3d_x(p3d, phase);
-            p3d = rotate3d_y(p3d, 1.5f*phase);
-            p3d = rotate3d_z(p3d, 2.0f*phase);
+            p3d = rotate3d_x(p3d, local_rot_x);
+            p3d = rotate3d_y(p3d, local_rot_y);
             p_points[p] = p3d;
         }
-
-        for(int p = 0;p < 4; p++){
+        for(int p = 0; p < 4; p++){
             point3d_t p1 = p_points[p];
             point3d_t p2 = p_points[(p+1)%4];
             draw_line((point_t){p1.x,p1.y}, (point_t){p2.x,p2.y}, frame_buf2, offset);
         }
-        for(int p = 0;p < 4; p++){
+        for(int p = 0; p < 4; p++){
             point3d_t p1 = p_points[p+4];
             point3d_t p2 = p_points[(p+1)%4+4];
             draw_line((point_t){p1.x,p1.y}, (point_t){p2.x,p2.y}, frame_buf2, offset);
         }
-        for(int p = 0;p < 4; p++){
+        for(int p = 0; p < 4; p++){
             point3d_t p1 = p_points[p];
             point3d_t p2 = p_points[(p+4)%8];
             draw_line((point_t){p1.x,p1.y}, (point_t){p2.x,p2.y}, frame_buf2, offset);
         }
-        phase+=0.01;
-        // offset++;
-        // draw_pixel(point, 0xffff, frame_buf2);
         vTaskDelay(pdMS_TO_TICKS(16));
     }
 }
@@ -163,26 +209,64 @@ void button_task(void *pvParams){
     for (int i = 0; i < 4; i++) {
         gpio_init(button_pins[i]);
         gpio_set_dir(button_pins[i], GPIO_IN);
-        // Enable internal pull-up so the button connects to GND
         gpio_pull_up(button_pins[i]); 
     }
-    bool last_states[4] = {true, true, true, true}; // Start unpressed (HIGH)
-    while(true){
-    for (int i = 0; i < 4; i++) {
-                bool current_state = gpio_get(button_pins[i]);
-                
-                // Check for falling edge (button press)
-                if (!current_state && last_states[i]) {
-                    printf("Button on GP%d pressed!\n", button_pins[i]);
-                    // Perform your action here
-                }
-                last_states[i] = current_state;
-            }
-            
-            // Polling interval (e.g., 20ms) provides natural debouncing
-            vTaskDelay(pdMS_TO_TICKS(20));
+
+    while (true) {
+        // X-Axis (Pitch): GP21 vs GP22
+        if (!gpio_get(21)) {
+            dir_x = 1;   // Pitch Up
+        } else if (!gpio_get(27)) {
+            dir_x = -1;  // Pitch Down
+        } else {
+            dir_x = 0;   // No Pitch Input
+        }
+
+        // Y-Axis (Yaw): GP26 vs GP27
+        if (!gpio_get(22)) {
+            dir_y = 1;   // Yaw Right
+        } else if (!gpio_get(26)) {
+            dir_y = -1;  // Yaw Left
+        } else {
+            dir_y = 0;   // No Yaw Input
+        }
+
+        // 20ms polling interval protects against mechanical contact bounce
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
+#if ENABLE_DEBUG_MODE
+void debug_diagnostic_task(void *pvParams) {
+    absolute_time_t last_log_time = get_absolute_time();
+    uint32_t last_frames = debug_frame_counter;
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000)); 
+        absolute_time_t now = get_absolute_time();
+        int64_t elapsed_us = absolute_time_diff_us(last_log_time, now);
+        last_log_time = now;
+
+        uint32_t current_frames = debug_frame_counter;
+        uint32_t frames_drawn = current_frames - last_frames;
+        last_frames = current_frames;
+
+        double elapsed_seconds = (double)elapsed_us / 1000000.0;
+        float precise_fps = 0.0f;
+        
+        if (elapsed_seconds > 0.0) {
+            precise_fps = (float)((double)frames_drawn / elapsed_seconds);
+        }
+
+        size_t free_heap = xPortGetFreeHeapSize();
+
+        printf("\n--- RP2040 SYSTEM DIAGNOSTICS ---\n");
+        printf("Performance Metrics  : %.2f FPS (Actual Window: %.3f sec)\n", precise_fps, (float)elapsed_seconds);
+        printf("Free Memory Heap     : %u Bytes\n", free_heap);
+        printf("Current Angular State: X: %.2f rad | Y: %.2f rad\n", debug_current_angle_x, debug_current_angle_y);
+        printf("Hardware Input Vector: DirX: %d | DirY: %d\n", dir_x, dir_y);
+    }
+}
+#endif
 // ISR FUNCS
 void __isr dma_callback(){
     dma_hw->ints0 = 1 << dma_tx_chan;
@@ -229,6 +313,7 @@ void dma_init(){
     );
 
     dma_sema = xSemaphoreCreateBinary();
+    configASSERT(dma_sema != NULL);
 }
 
 // SPI DISPLAY HELPER FUNCS
@@ -262,18 +347,18 @@ void send_data(uint8_t* data, size_t length){
     gpio_put(CSN, 1);
 }
 void write_frame_buffer(uint8_t frame_buffer[WIDTH][HEIGHT][BYTES_PER_PIXEL]){
-    if(xSemaphoreTake(spi_mtx, portMAX_DELAY) == pdTRUE){
-        set_address_window(0, 0, 127, 159);
-        gpio_put(DC, 1);
-        dma_channel_set_read_addr(dma_tx_chan, frame_buffer, false);
-        dma_channel_set_trans_count(dma_tx_chan, 128*160*2, false);
-        gpio_put(CSN, 0);
-        gpio_put(PICO_DEFAULT_LED_PIN, 1);
-        dma_channel_start(dma_tx_chan);
+    int status = xSemaphoreTake(spi_mtx, portMAX_DELAY);
+    configASSERT(status == pdTRUE); 
+    set_address_window(0, 0, 127, 159);
+    gpio_put(DC, 1);
+    dma_channel_set_read_addr(dma_tx_chan, frame_buffer, false);
+    dma_channel_set_trans_count(dma_tx_chan, 128*160*2, false);
+    gpio_put(CSN, 0);
+    gpio_put(PICO_DEFAULT_LED_PIN, 1);
+    dma_channel_start(dma_tx_chan);
 
-        xSemaphoreTake(dma_sema, portMAX_DELAY); // Blocks current task allowing for frame_buf_task to execute
-        xSemaphoreGive(spi_mtx);
-    }
+    xSemaphoreTake(dma_sema, portMAX_DELAY); // Blocks current task allowing for frame_buf_task to execute
+    xSemaphoreGive(spi_mtx);
 }
 
 // DRAWING FUNCS
@@ -394,3 +479,44 @@ point3d_t rotate3d_z(point3d_t p3, float theta){
 // }
 // draw_wave_160_samples(sin_table);
 // draw_wave_160_samples(grid);
+
+
+// spinning code
+
+// point3d_t points[8] = {
+//     {40, 40, -40},
+//     {40, -40, -40}, 
+//     {40, -40, 40}, 
+//     {40, 40, 40},
+
+//     {-40, 40, -40},
+//     {-40, -40, -40}, 
+//     {-40, -40, 40}, 
+//     {-40, 40, 40},
+    
+// };
+// point3d_t p_points[8];
+// for(int p = 0;p < 8; p++){
+//     point3d_t p3d = points[p];
+//     p3d = rotate3d_x(p3d, phase);
+//     p3d = rotate3d_y(p3d, 1.5f*phase);
+//     p3d = rotate3d_z(p3d, 2.0f*phase);
+//     p_points[p] = p3d;
+// }
+
+// for(int p = 0;p < 4; p++){
+//     point3d_t p1 = p_points[p];
+//     point3d_t p2 = p_points[(p+1)%4];
+//     draw_line((point_t){p1.x,p1.y}, (point_t){p2.x,p2.y}, frame_buf2, offset);
+// }
+// for(int p = 0;p < 4; p++){
+//     point3d_t p1 = p_points[p+4];
+//     point3d_t p2 = p_points[(p+1)%4+4];
+//     draw_line((point_t){p1.x,p1.y}, (point_t){p2.x,p2.y}, frame_buf2, offset);
+// }
+// for(int p = 0;p < 4; p++){
+//     point3d_t p1 = p_points[p];
+//     point3d_t p2 = p_points[(p+4)%8];
+//     draw_line((point_t){p1.x,p1.y}, (point_t){p2.x,p2.y}, frame_buf2, offset);
+// }
+// phase+=0.01;
